@@ -1,4 +1,12 @@
+"""
+Usage:
+  server.py
+  server.py --debug
+  server.py --test
+"""
+from bottle import hook, redirect
 from bottle import abort, get, post, route, request, response, template
+from docopt import docopt
 from paste import httpserver
 import base64
 import bottle
@@ -16,28 +24,41 @@ output_to_mime = {
 }
 
 
+def encode(dot):
+  """
+  >>> decode(encode('hello    world'))
+  'hello world'
+  """
+  return base64.urlsafe_b64encode(' '.join(dot.split()).encode('zlib'))
+
+def decode(encoded_dot):
+  return base64.urlsafe_b64decode(encoded_dot).decode('zlib')
+
 def render(encoded_dot, output):
-    p = subprocess.Popen(['/usr/bin/dot', '-T' + output],
-                         stdout=subprocess.PIPE,
-                         stdin=subprocess.PIPE,
-                         stderr=subprocess.PIPE)
-    return p.communicate(
-        input=base64.urlsafe_b64decode(encoded_dot).decode('zlib'))[0]
+  """
+  >>> render(encode('digraph {a->b}'), 'svg').rstrip().endswith('</svg>')
+  True
+  """
+  p = subprocess.Popen(['/usr/bin/dot', '-T' + output],
+                       stdout=subprocess.PIPE,
+                       stdin=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
+  return p.communicate(input=decode(encoded_dot))[0]
 
 
 @route('/o/<output>/<encoded_dot>')
 def o(output, encoded_dot):
-    if output not in output_to_mime:
-        abort(404, output + " is not an available output type")
-    response.content_type = output_to_mime[output]
-    response.set_header('Cache-Control', 'public, max-age=' + img_max_age)
-    return render(encoded_dot, output)
+  if output not in output_to_mime:
+    abort(404, output + " is not an available output type")
+  response.content_type = output_to_mime[output]
+  response.set_header('Cache-Control', 'public, max-age=' + img_max_age)
+  return render(encoded_dot, output)
 
 
 @get('/create')
 def create():
-    response.set_header('Cache-Control', 'public, max-age=' + page_max_age)
-    return '''
+  response.set_header('Cache-Control', 'public, max-age=' + page_max_age)
+  return '''
 <!DOCTYPE html>
 <html>
   <head>
@@ -60,14 +81,11 @@ def create():
 </html>
 '''
 
-
 @post('/create')
 def create():
-    dot = request.forms.get('dot')
-    response.status = 303
-    response.set_header(
-        'Location', '/created/' +
-        base64.urlsafe_b64encode(' '.join(dot.split()).encode('zlib')))
+  dot = request.forms.get('dot')
+  response.status = 303
+  response.set_header('Location', '/created/' + encode(dot))
 
 created_template = template('''
 <!DOCTYPE html>
@@ -90,14 +108,14 @@ created_template = template('''
 
 @route('/created/<encoded_dot>')
 def created(encoded_dot):
-    response.set_header('Cache-Control', 'public, max-age=' + page_max_age)
-    return created_template.format(encoded_dot=encoded_dot)
+  response.set_header('Cache-Control', 'public, max-age=' + page_max_age)
+  return created_template.format(encoded_dot=encoded_dot)
 
 
 @route('/')
 def home():
-    response.set_header('Cache-Control', 'public, max-age=' + page_max_age)
-    return '''
+  response.set_header('Cache-Control', 'public, max-age=' + page_max_age)
+  return '''
 <!DOCTYPE html>
 <html>
   <head>
@@ -117,8 +135,24 @@ def home():
 
 @route('/z/health')
 def health():
-    return 'OK'
+  return 'OK'
 
+def https_redirect():
+  if not request.get_header('X-Forwarded-Proto', 'http') == 'https':
+    if request.url.startswith('http://') and not request.path.startswith(
+        '/z'):
+      redirect(request.url.replace('http://', 'https://', 1), code=301)
 
-application = bottle.default_app()
-httpserver.serve(application, host='0.0.0.0', port=8080)
+if __name__ == '__main__':
+  arguments = docopt(__doc__)
+  if arguments['--test']:
+    import doctest
+    import sys
+    sys.exit(doctest.testmod()[0])
+  elif arguments['--debug']:
+    bottle.debug(True)
+    bottle.run(host='localhost', port=8080)
+  else:
+    application = bottle.default_app()
+    application.hook('before_request')(https_redirect)
+    httpserver.serve(application, host='0.0.0.0', port=8080)

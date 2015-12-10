@@ -1,0 +1,5 @@
+language: python
+install:
+    - sudo ./install-deps.sh
+# command to run tests
+script: sudo ./test.sh
